@@ -3,6 +3,7 @@ import { CITY, COLORS } from './config.js';
 
 const THREE = globalThis.THREE;
 const BUILDING_COLORS = ['#d38a70', '#bd9d78', '#8899a0', '#c9b79d', '#a67688', '#728b87', '#d5b769', '#69798d'];
+const PARKED_CAR_COUNT = 36;
 const DISTRICTS = [
   { name: 'Glass Mile', x: [-560, -260], z: [-560, -220], style: 'tower' },
   { name: 'Mar Azul', x: [-560, -220], z: [270, 560], style: 'beach' },
@@ -54,6 +55,43 @@ function addTree(scene, x, z, scale = 1, bark, leaf) {
 
 function districtAt(x, z) { return DISTRICTS.find((d) => x >= d.x[0] && x <= d.x[1] && z >= d.z[0] && z <= d.z[1]) ?? { name: 'Vista Bay', style: 'midrise' }; }
 
+function createResidentialMaterials() {
+  return ['#d9bb91', '#b87965', '#e3d2ad', '#95a59b'].map((color) => (
+    new THREE.MeshStandardMaterial({ color, roughness: 0.85 })
+  ));
+}
+
+function addParkedCars(scene, rng, colors) {
+  const geometry = new THREE.BoxGeometry(2.2, 1.15, 4.4);
+  const material = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.42, metalness: 0.2 });
+  const cars = new THREE.InstancedMesh(geometry, material, PARKED_CAR_COUNT);
+  cars.castShadow = true;
+  cars.receiveShadow = true;
+  cars.frustumCulled = true;
+  const dummy = new THREE.Object3D();
+  let index = 0;
+  for (let attempt = 0; attempt < 160 && index < cars.count; attempt += 1) {
+    const x = rng.range(-560, 560);
+    const z = rng.range(-560, 475);
+    const avenueEdge = Math.abs((x + 600) % 100 - 50);
+    const streetEdge = Math.abs((z + 600) % 100 - 50);
+    if (avenueEdge < 29 || streetEdge < 29) continue;
+    const district = DISTRICTS.find((entry) => x >= entry.x[0] && x <= entry.x[1] && z >= entry.z[0] && z <= entry.z[1]);
+    if (district?.style === 'beach' || district?.style === 'port') continue;
+    dummy.position.set(x, 0.65, z);
+    dummy.rotation.set(0, rng.pick([0, Math.PI / 2]), 0);
+    dummy.updateMatrix();
+    cars.setMatrixAt(index, dummy.matrix);
+    cars.setColorAt(index, new THREE.Color(rng.pick(colors)));
+    index += 1;
+  }
+  cars.count = index;
+  cars.instanceMatrix.needsUpdate = true;
+  if (cars.instanceColor) cars.instanceColor.needsUpdate = true;
+  scene.add(cars);
+  return cars;
+}
+
 export function createCity(scene, rng) {
   const roadGraph = makeRoadGraph(), spawnPoints = [], colliders = [], districts = [];
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(CITY.size, CITY.size), new THREE.MeshStandardMaterial({ color: '#547665', roughness: 1 }));
@@ -89,6 +127,7 @@ export function createCity(scene, rng) {
   const ocean = new THREE.Mesh(new THREE.PlaneGeometry(CITY.ocean, CITY.ocean), waterMat); ocean.rotation.x = -Math.PI / 2; ocean.position.set(0, -0.32, 2720); scene.add(ocean);
 
   const buildingMaterials = BUILDING_COLORS.map((color) => { const texture = windowTexture(rng, true); return new THREE.MeshStandardMaterial({ color, map: texture, emissive: '#f0a568', emissiveMap: texture, emissiveIntensity: 0.43, roughness: 0.72 }); });
+  const residentialMaterials = createResidentialMaterials();
   const roofMat = new THREE.MeshStandardMaterial({ color: '#4a4a50', roughness: 0.95 });
   for (let gx = -6; gx < 6; gx++) for (let gz = -6; gz < 6; gz++) {
     const cx = gx * 100 + 50, cz = gz * 100 + 50, district = districtAt(cx, cz);
@@ -99,7 +138,7 @@ export function createCity(scene, rng) {
     if (district.style === 'suburb') h = rng.range(6, 13);
     if (district.style === 'strip') h = rng.range(12, 29);
     if (district.style === 'hill') h = rng.range(7, 30);
-    const mat = district.style === 'suburb' ? new THREE.MeshStandardMaterial({ color: rng.pick(['#d9bb91', '#b87965', '#e3d2ad', '#95a59b']), roughness: 0.85 }) : rng.pick(buildingMaterials);
+    const mat = district.style === 'suburb' ? rng.pick(residentialMaterials) : rng.pick(buildingMaterials);
     const mesh = box(scene, mat, x, 0, z, sx, h, sz); mesh.userData.district = district.name;
     if (district.style === 'tower' || district.style === 'strip') box(scene, roofMat, x + 2, h, z + 2, sx - 4, rng.range(1, 3), sz - 4, false);
     if (district.style === 'strip' && rng.chance(0.45)) {
@@ -155,8 +194,8 @@ export function createCity(scene, rng) {
   const fountain = new THREE.Mesh(new THREE.CylinderGeometry(11, 12, 0.8, 24), new THREE.MeshStandardMaterial({ color: '#81c6c4', metalness: 0.38, roughness: 0.2 })); fountain.position.set(165, 0.4, -5); scene.add(fountain);
 
   const parkedColors = ['#bb515b', '#e2c78c', '#38858e', '#576985', '#e7834e'];
-  for (let i = 0; i < 36; i++) { const x = rng.range(-560, 560), z = rng.range(-560, 475); if (Math.abs((x + 600) % 100 - 50) < 29 || Math.abs((z + 600) % 100 - 50) < 29) continue; const car = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.15, 4.4), new THREE.MeshStandardMaterial({ color: rng.pick(parkedColors), roughness: 0.42, metalness: 0.2 })); car.position.set(x, 0.65, z); car.rotation.y = rng.pick([0, Math.PI / 2]); scene.add(car); }
+  const parkedCars = addParkedCars(scene, rng, parkedColors);
 
   spawnPoints.push({ x: -38, z: 12, yaw: 0 });
-  return { roadGraph, spawnPoints, colliders, districts, districtZones: DISTRICTS, ocean, waterMat, roadMaterial: asphalt, lampMaterial: bulbMat, districtList: DISTRICTS.map(({ name }) => name) };
+  return { roadGraph, spawnPoints, colliders, districts, districtZones: DISTRICTS, ocean, waterMat, roadMaterial: asphalt, lampMaterial: bulbMat, parkedCars, districtList: DISTRICTS.map(({ name }) => name) };
 }

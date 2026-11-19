@@ -5,6 +5,7 @@ const COLORS = {
   mapRoad: '#64717d',
   mapEdge: '#27313d',
 };
+const MAP_ZOOM = 330;
 
 function makeElement(tag, className, parent) {
   const element = document.createElement(tag);
@@ -30,7 +31,7 @@ function installStyles() {
     '.vb-money-label{display:block;color:#e9dcca;font-size:8px;letter-spacing:.2em}',
     '.vb-ammo{position:absolute;right:28px;bottom:82px;text-align:right;font-size:19px;font-weight:800}',
     '.vb-ammo small{display:block;font-size:9px;letter-spacing:.16em}',
-    '.vb-objective{position:absolute;top:114px;left:50%;transform:translateX(-50%);width:min(390px,70vw);text-align:center}',
+    '.vb-objective{position:absolute;top:114px;left:50%;transform:translateX(-50%);width:min(390px,70vw);text-align:center;padding:8px 12px;background:rgba(9,12,22,.24);border-bottom:1px solid rgba(255,255,255,.12)}',
     '.vb-objective b{display:block;color:#ffd078;font-size:11px;letter-spacing:.2em;text-transform:uppercase}',
     '.vb-objective span{display:block;margin-top:4px;font-size:13px}',
     '.vb-toast{position:absolute;top:24%;left:50%;transform:translate(-50%,-8px);opacity:0;padding:9px 15px;background:rgba(13,15,27,.84);border:1px solid rgba(255,255,255,.22);transition:opacity .2s,transform .2s;letter-spacing:.09em;font-size:12px}',
@@ -43,6 +44,15 @@ function installStyles() {
     '.vb-speed-value{margin-top:-13px;font-weight:850;font-size:20px}',
     '.vb-speed-label{color:#ded7cf;font-size:9px;letter-spacing:.18em}',
     '.vb-wanted{position:absolute;right:28px;top:24px;color:#ffd078;font-size:21px;letter-spacing:.18em}',
+    '.vb-dialogue{position:absolute;left:50%;top:29%;transform:translate(-50%,-8px);width:min(520px,82vw);padding:12px 18px;border-left:3px solid #62e3dc;background:rgba(9,12,22,.74);opacity:0;transition:opacity .25s,transform .25s;text-align:left}',
+    '.vb-dialogue.visible{opacity:1;transform:translate(-50%,0)}',
+    '.vb-dialogue b{display:block;color:#62e3dc;font-size:9px;letter-spacing:.2em;text-transform:uppercase}',
+    '.vb-dialogue span{display:block;margin-top:4px;font-size:14px;line-height:1.4}',
+    '.vb-mission-stage{position:absolute;left:50%;top:calc(20% + 10px);transform:translateX(-50%);font-size:8px;color:#bec8d1;letter-spacing:.22em;text-transform:uppercase}',
+    '.vb-weather-pill{display:inline-block;padding:3px 7px;border:1px solid rgba(180,220,236,.26);background:rgba(14,28,42,.72);border-radius:99px}',
+    '.vb-map::after{content:"";position:absolute;inset:0;border-radius:50%;pointer-events:none;box-shadow:inset 0 0 22px rgba(0,0,0,.36)}',
+    '.vb-speed-lines{position:absolute;inset:0;opacity:0;pointer-events:none;background:repeating-conic-gradient(from 0deg at 50% 55%,transparent 0deg 8deg,rgba(200,235,245,.18) 8.3deg 8.45deg,transparent 8.8deg 15deg);mask-image:radial-gradient(ellipse,transparent 0 31%,#000 68%);transition:opacity .2s}',
+    '.vb-weather{position:absolute;right:28px;bottom:28px;color:#a9d7e5;font-size:10px;letter-spacing:.14em}',
     '@media(max-width:600px){.vb-map{width:130px;height:130px;left:12px;bottom:12px}.vb-bars{top:12px;width:38vw}.vb-speed{bottom:16px;width:130px}.vb-currency{right:14px;top:67px;font-size:16px}.vb-ammo{right:14px;bottom:65px}.vb-wanted{right:14px;top:14px}}',
   ].join('');
   document.head.append(style);
@@ -112,6 +122,14 @@ export function createHud(root, roadGraph) {
   const damage = makeElement('div', 'vb-damage', root);
   const wanted = makeElement('div', 'vb-wanted', root);
   const speedometer = makeElement('div', 'vb-speed', root);
+  const speedLines = makeElement('div', 'vb-speed-lines', root);
+  const dialogue = makeElement('div', 'vb-dialogue', root);
+  const dialogueSpeaker = makeElement('b', '', dialogue);
+  const dialogueLine = makeElement('span', '', dialogue);
+  const weatherLabel = makeElement('div', 'vb-weather', root);
+  const pursuit = makeElement('div', 'vb-pursuit', root);
+  const pursuitFill = makeElement('i', '', pursuit);
+  const missionStage = makeElement('div', 'vb-mission-stage', root);
   const speedMarkup = makeElement('div', '', speedometer);
   const speedValue = makeElement('div', 'vb-speed-value', speedometer);
   const speedLabel = makeElement('div', 'vb-speed-label', speedometer);
@@ -125,6 +143,7 @@ export function createHud(root, roadGraph) {
   let currentDistrict = '';
   let previousWanted = 0;
   let elapsed = 0;
+  let dialogueTimer = 0;
 
   moneyLabel.textContent = 'CARRYING';
   ammoIcon.textContent = '◇';
@@ -149,6 +168,7 @@ export function createHud(root, roadGraph) {
   function setObjective(title, line) {
     missionTitle.textContent = title;
     missionLine.textContent = line;
+    objective.setAttribute('aria-label', title + '. ' + line);
   }
 
   function setMoney(value) {
@@ -163,7 +183,7 @@ export function createHud(root, roadGraph) {
     const height = mapCanvas.height;
     const centerX = state.position.x;
     const centerZ = state.position.z;
-    const scale = Math.min(width, height) / 330;
+    const scale = Math.min(width, height) / MAP_ZOOM;
     mapContext.setTransform(1, 0, 0, 1, width / 2, height / 2);
     mapContext.clearRect(-width / 2, -height / 2, width, height);
     mapContext.save();
@@ -212,7 +232,7 @@ export function createHud(root, roadGraph) {
     mapContext.beginPath();
     mapContext.arc(0, 0, Math.min(width, height) * 0.47, 0, Math.PI * 2);
     mapContext.stroke();
-    drawArrow(mapContext, 0, 0, 0, COLORS.mint, 8);
+    drawArrow(mapContext, 0, 0, state.heading, COLORS.mint, 8);
     mapLabel.textContent = state.district;
   }
 
@@ -221,7 +241,9 @@ export function createHud(root, roadGraph) {
     toastTimer = Math.max(0, toastTimer - dt);
     popupTimer = Math.max(0, popupTimer - dt);
     wantedFlash = Math.max(0, wantedFlash - dt);
+    dialogueTimer = Math.max(0, dialogueTimer - dt);
     toast.classList.toggle('visible', toastTimer > 0);
+    dialogue.classList.toggle('visible', dialogueTimer > 0);
     districtPopup.classList.toggle('visible', popupTimer > 0);
     if (state.wanted > previousWanted) {
       wantedFlash = 0.7;
@@ -237,9 +259,13 @@ export function createHud(root, roadGraph) {
     ammoCount.textContent = state.weapon === 'Unarmed' ? state.weapon : state.ammo + ' / ' + state.reserve;
     speedValue.textContent = state.driving ? Math.round(state.speed) : '';
     speedLabel.textContent = state.driving ? 'KM/H' : '';
+    mapKey.textContent = state.driving ? '▲ HEADING  ● COUNTY' : '▲ HEADING  ● COUNTY  ● GOAL';
     const ratio = Math.max(0, Math.min(1, state.speed / 220));
     speedArc.style.strokeDashoffset = String(210 - ratio * 210);
     speedometer.style.opacity = state.driving ? '1' : '0';
+    speedLines.style.opacity = state.driving ? String(Math.max(0, Math.min(0.42, (state.speed - 95) / 300))) : '0';
+    setWeather(state.weather);
+    setPursuit(state.pursuit);
     const pulse = state.health < 0.25 ? 0.12 + Math.sin(elapsed * 5) * 0.08 : 0;
     damage.style.opacity = String(Math.max(state.damage, pulse));
     if (state.district !== currentDistrict) {
@@ -261,6 +287,7 @@ export function createHud(root, roadGraph) {
   function setWantedLevel(level) {
     const clamped = Math.max(0, Math.min(5, level));
     wanted.textContent = '★'.repeat(clamped) + '☆'.repeat(5 - clamped);
+    previousWanted = clamped;
   }
 
   function setWeapon(name, currentAmmo, reserveAmmo) {
@@ -277,6 +304,24 @@ export function createHud(root, roadGraph) {
     missionTitle.dataset.z = point ? String(point.z) : '';
   }
 
+  function showDialogue(speaker, line, seconds = 4) {
+    dialogueSpeaker.textContent = speaker;
+    dialogueLine.textContent = line;
+    dialogueTimer = seconds;
+  }
+
+  function setWeather(weather) {
+    weatherLabel.textContent = weather === 'rain' ? 'RAIN · WET ROADS' : '';
+    weatherLabel.classList.toggle('wet', weather === 'rain');
+  }
+
+  function setPursuit(value) {
+    const amount = Math.max(0, Math.min(100, value));
+    pursuit.classList.toggle('visible', amount > 0);
+    pursuitFill.style.width = String(amount) + '%';
+    missionStage.textContent = amount > 0 ? 'COUNTY CONTACT · KEEP MOVING' : '';
+  }
+
   resizeMap();
   window.addEventListener('resize', resizeMap);
   return {
@@ -290,6 +335,9 @@ export function createHud(root, roadGraph) {
     setWeapon,
     setDamage,
     setMissionBlip,
+    showDialogue,
+    setWeather,
+    setPursuit,
     setStation(name) {
       showToast('Now playing: ' + name, 3.2);
     },

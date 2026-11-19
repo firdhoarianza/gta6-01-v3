@@ -1,6 +1,8 @@
 // Versioned local progress storage for Vista Bay.
 const STORAGE_KEY = 'vista-bay-low-tide';
-const SCHEMA_VERSION = 2;
+const MAX_MONEY = 999999999;
+const SCHEMA_VERSION = 3;
+const DEFAULT_VOLUME = 0.76;
 
 function defaultState() {
   return {
@@ -13,7 +15,8 @@ function defaultState() {
       dayCycle: true,
       radioStation: 'Sable FM',
       weather: 'clear',
-      volume: 0.76,
+      volume: DEFAULT_VOLUME,
+      cameraShake: true,
     },
     updatedAt: 0,
   };
@@ -27,15 +30,16 @@ function normalize(value) {
     : {};
   return {
     version: SCHEMA_VERSION,
-    money: Number.isFinite(source.money) ? Math.max(0, source.money) : defaults.money,
-    missions: Array.isArray(source.missions) ? source.missions.filter((item) => typeof item === 'string') : [],
+    money: Number.isFinite(source.money) ? Math.min(MAX_MONEY, Math.max(0, source.money)) : defaults.money,
+    missions: Array.isArray(source.missions) ? [...new Set(source.missions.filter((item) => typeof item === 'string' && item.length > 0))] : [],
     weapons: Array.isArray(source.weapons) ? source.weapons.filter((item) => typeof item === 'string') : defaults.weapons,
     selectedWeapon: typeof source.selectedWeapon === 'string' ? source.selectedWeapon : defaults.selectedWeapon,
     settings: {
       dayCycle: settings.dayCycle !== false,
       radioStation: typeof settings.radioStation === 'string' ? settings.radioStation : defaults.settings.radioStation,
       weather: settings.weather === 'rain' ? 'rain' : 'clear',
-      volume: Number.isFinite(settings.volume) ? Math.min(1, Math.max(0, settings.volume)) : defaults.settings.volume,
+      volume: Number.isFinite(settings.volume) ? Math.round(Math.min(1, Math.max(0, settings.volume)) * 100) / 100 : defaults.settings.volume,
+      cameraShake: settings.cameraShake !== false,
     },
     updatedAt: Number.isFinite(source.updatedAt) ? source.updatedAt : 0,
   };
@@ -51,8 +55,12 @@ function migrate(parsed) {
       dayCycle: parsed.settings?.dayCycle !== false,
       radioStation: parsed.radioStation || 'Sable FM',
       weather: 'clear',
-      volume: 0.76,
+      volume: DEFAULT_VOLUME,
+      cameraShake: true,
     };
+  }
+  if (version < 3 && parsed.settings) {
+    parsed.settings.cameraShake = true;
   }
   return normalize(parsed);
 }
@@ -69,6 +77,12 @@ export function createSave() {
         return structuredClone(state);
       }
       state = migrate(JSON.parse(stored));
+      if (!state.weapons.includes('Unarmed')) {
+        state.weapons.unshift('Unarmed');
+      }
+      if (!state.weapons.includes(state.selectedWeapon)) {
+        state.selectedWeapon = 'Unarmed';
+      }
       return structuredClone(state);
     } catch (error) {
       state = defaultState();
@@ -92,7 +106,13 @@ export function createSave() {
   }
 
   function completeMission(missionId, reward = 0) {
+    if (typeof missionId !== 'string' || !missionId) {
+      return state;
+    }
     const completed = new Set(state.missions);
+    if (completed.has(missionId)) {
+      return state;
+    }
     completed.add(missionId);
     save({ missions: [...completed], money: state.money + Math.max(0, reward) });
     return state;
@@ -120,6 +140,13 @@ export function createSave() {
     return true;
   }
 
+  function setVolume(volume) {
+    const numericVolume = Number(volume);
+    const normalizedVolume = Number.isFinite(numericVolume) ? numericVolume : defaultState().settings.volume;
+    updateSettings({ volume: Math.round(Math.max(0, Math.min(1, normalizedVolume)) * 100) / 100 });
+    return state.settings.volume;
+  }
+
   return {
     load,
     save,
@@ -129,5 +156,6 @@ export function createSave() {
     checkpointOnMissionComplete,
     getState,
     reset,
+    setVolume,
   };
 }

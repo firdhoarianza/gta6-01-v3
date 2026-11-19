@@ -3,6 +3,7 @@ import { CAMERA, PLAYER } from './config.js';
 
 const THREE = globalThis.THREE;
 const CITY_EDGE = 593;
+const CAMERA_COLLISION_PADDING = 0.42;
 
 function makeMaterial(color, roughness = 0.8) {
   return new THREE.MeshStandardMaterial({ color, roughness });
@@ -90,13 +91,16 @@ export function createPlayer(scene, spawn, colliders, camera, audio = null) {
   const cameraTarget = new THREE.Vector3();
   const cameraDirection = new THREE.Vector3();
   const cameraRay = new THREE.Raycaster();
+  const cameraSideRay = new THREE.Raycaster();
+  const cameraSideDirection = new THREE.Vector3();
   const cameraBlockers = colliders.map((collider) => collider.mesh).filter(Boolean);
+  const cameraBlockerSet = new Set(cameraBlockers);
   let animationTime = 0;
   let footstepPhase = 0;
   let previousPlanarSpeed = 0;
   let jumpAge = 0;
   let transitionBlend = 0;
-  let wasInVehicle = false;
+  let cameraOccluded = false;
 
   function updateMouse(input) {
     const mouse = input.look();
@@ -172,6 +176,8 @@ export function createPlayer(scene, spawn, colliders, camera, audio = null) {
     }
     player.position.x = THREE.MathUtils.clamp(nextX, -CITY_EDGE, CITY_EDGE);
     player.position.z = THREE.MathUtils.clamp(nextZ, -CITY_EDGE, CITY_EDGE);
+    if (player.position.x === -CITY_EDGE || player.position.x === CITY_EDGE) player.velocity.x = 0;
+    if (player.position.z === -CITY_EDGE || player.position.z === CITY_EDGE) player.velocity.z = 0;
     const planarSpeed = Math.hypot(player.velocity.x, player.velocity.z);
     if (planarSpeed > 0.45) {
       const facing = Math.atan2(player.velocity.x, -player.velocity.z);
@@ -250,12 +256,24 @@ export function createPlayer(scene, spawn, colliders, camera, audio = null) {
     cameraDirection.normalize();
     cameraRay.set(lookTarget, cameraDirection);
     cameraRay.far = cameraDistance;
-    const hits = cameraRay.intersectObjects(cameraBlockers, false);
+    const hits = cameraRay.intersectObjects(cameraBlockers, false).filter((hit) => cameraBlockerSet.has(hit.object));
     if (hits.length > 0) {
-      cameraTarget.copy(hits[0].point).addScaledVector(cameraDirection, -0.42);
+      cameraTarget.copy(hits[0].point).addScaledVector(cameraDirection, -CAMERA_COLLISION_PADDING);
+    }
+    cameraSideDirection.crossVectors(cameraDirection, world.camera.up).normalize();
+    const sideRayDirection = cameraDirection.clone().addScaledVector(cameraSideDirection, CAMERA.collisionRadius).normalize();
+    cameraSideRay.set(lookTarget, sideRayDirection);
+    cameraSideRay.far = cameraDistance;
+    const sideHits = cameraSideRay.intersectObjects(cameraBlockers, false);
+    if (sideHits.length > 0 && sideHits[0].distance < cameraRay.far) {
+      cameraTarget.copy(sideHits[0].point).addScaledVector(cameraDirection, -CAMERA_COLLISION_PADDING);
+      cameraOccluded = true;
+    } else {
+      cameraOccluded = hits.length > 0;
     }
     const smooth = CAMERA.smooth + transitionBlend * 2.5;
-    world.camera.position.lerp(cameraTarget, 1 - Math.exp(-smooth * dt));
+    const response = cameraOccluded ? smooth * 2.4 : smooth;
+    world.camera.position.lerp(cameraTarget, 1 - Math.exp(-response * dt));
     world.camera.lookAt(lookTarget);
   }
 
@@ -273,7 +291,8 @@ export function createPlayer(scene, spawn, colliders, camera, audio = null) {
     vehicle.occupied = true;
     player.avatar.visible = false;
     player.position.copy(vehicle.root.position);
-    wasInVehicle = true;
+    player.velocity.set(0, 0, 0);
+    player.vertical = 0;
   }
 
   function exit() {
@@ -283,13 +302,19 @@ export function createPlayer(scene, spawn, colliders, camera, audio = null) {
     const vehicle = player.inVehicle;
     const side = new THREE.Vector3(Math.cos(vehicle.yaw), 0, Math.sin(vehicle.yaw));
     player.position.copy(vehicle.root.position).addScaledVector(side, 1.8);
+    for (const collider of colliders) {
+      if (capsuleBuildingOverlap(player.position.x, player.position.z, 0, PLAYER.radius, PLAYER.height, collider)) {
+        player.position.addScaledVector(side, 1.5);
+      }
+    }
+    player.position.x = THREE.MathUtils.clamp(player.position.x, -CITY_EDGE, CITY_EDGE);
+    player.position.z = THREE.MathUtils.clamp(player.position.z, -CITY_EDGE, CITY_EDGE);
     player.position.y = 0;
     player.yaw = vehicle.yaw;
     player.cameraYaw = vehicle.yaw;
     player.inVehicle = null;
     vehicle.occupied = false;
     player.avatar.visible = true;
-    wasInVehicle = false;
     return vehicle;
   }
 
@@ -298,9 +323,16 @@ export function createPlayer(scene, spawn, colliders, camera, audio = null) {
     player.vertical = 0;
     player.velocity.set(0, 0, 0);
     player.inVehicle = null;
+    player.grounded = true;
+    player.crouched = false;
+    player.cameraYaw = point.yaw ?? player.cameraYaw;
+    player.yaw = player.cameraYaw;
     player.avatar.visible = true;
     player.health = 1;
     player.armor = 0.35;
+    avatar.limbs.forEach((limb) => {
+      limb.pivot.rotation.set(0, 0, 0);
+    });
   }
 
   function footstep(intensity = 1) {

@@ -17,6 +17,9 @@ function addStyle() {
     '.vb-outcome-card p{color:#ead5c5;margin:12px 0 24px}',
     '.vb-outcome-card .eyebrow{color:#62e3de;letter-spacing:.25em;font-size:11px}',
     '.vb-control-sheet[hidden]{display:none}',
+    '.vb-control-sheet{padding-top:16px;border-top:1px solid rgba(255,255,255,.12)}',
+    '.vb-menu-actions button:focus-visible,.screen button:focus-visible{outline:2px solid #62e3dc;outline-offset:4px}',
+    '.vb-skyline{pointer-events:none}',
   ].join('');
   document.head.append(style);
 }
@@ -26,8 +29,13 @@ function createButton(label, parent, className = '') {
   button.type = 'button';
   button.textContent = label;
   button.className = className;
+  button.setAttribute('aria-label', label);
   parent.append(button);
   return button;
+}
+
+function focusFirstButton(screen) {
+  screen.querySelector('button')?.focus();
 }
 
 function createControlSheet(parent) {
@@ -41,6 +49,9 @@ function createControlSheet(parent) {
     ['1 2 3', 'Select weapon'],
     ['N', 'Change radio'],
     ['T', 'Toggle day cycle'],
+    ['Y', 'Toggle rain'],
+    ['H', 'Horn'],
+    ['R', 'Reload'],
     ['P / ESC', 'Pause'],
   ];
   for (const [key, label] of entries) {
@@ -65,6 +76,8 @@ function createSkyline(screen) {
   let height = 0;
   let time = 0;
   let animation = 0;
+  let resizeObserver = null;
+  let stopped = false;
 
   function resize() {
     const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
@@ -81,6 +94,7 @@ function createSkyline(screen) {
   }
 
   function paint(now) {
+    if (stopped) return;
     time = now * 0.001;
     context.clearRect(0, 0, width, height);
     const sky = context.createLinearGradient(0, 0, 0, height);
@@ -157,11 +171,18 @@ function createSkyline(screen) {
   }
 
   resize();
-  window.addEventListener('resize', resize);
+  if (globalThis.ResizeObserver) {
+    resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(screen);
+  } else {
+    window.addEventListener('resize', resize);
+  }
   animation = requestAnimationFrame(paint);
   return {
     stop() {
+      stopped = true;
       cancelAnimationFrame(animation);
+      resizeObserver?.disconnect();
     },
   };
 }
@@ -177,6 +198,7 @@ function makeOutcome(kind) {
   eyebrow.textContent = 'VISTA BAY COUNTY';
   const title = document.createElement('h2');
   title.textContent = kind === 'wasted' ? 'Wasted' : 'Mission complete';
+  title.setAttribute('aria-live', 'polite');
   const detail = document.createElement('p');
   detail.textContent = kind === 'wasted' ? 'The bay will still be here tomorrow.' : 'A little more room to breathe.';
   card.append(eyebrow, title, detail);
@@ -192,7 +214,8 @@ export function createMenus(callbacks, saveState) {
   const titleScreen = document.getElementById('title');
   const pauseScreen = document.getElementById('pause');
   const bustScreen = document.getElementById('busted');
-  const skyline = createSkyline(titleScreen);
+  const shotMode = new URLSearchParams(window.location.search).has('shot');
+  const skyline = shotMode ? { stop() {} } : createSkyline(titleScreen);
   const titleCard = titleScreen.querySelector('.card');
   const titleControls = createControlSheet(titleCard);
   titleControls.hidden = true;
@@ -258,6 +281,7 @@ export function createMenus(callbacks, saveState) {
   function onPause(state) {
     setSaveInfo(state ?? saveState());
     callbacks.pause();
+    focusFirstButton(pauseScreen);
   }
 
   return {

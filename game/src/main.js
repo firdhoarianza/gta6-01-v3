@@ -1,6 +1,7 @@
 // Bootstrap and bounded simulation loop for Vista Bay — Low Tide.
 import { ACTION, createInput } from './input.js';
-import { createRng } from './rng.js';
+import { createRng, parseSeed } from './rng.js';
+import { WORLD } from './config.js';
 import { createWorld } from './world.js';
 import { createPlayer } from './player.js';
 import { createVehicle, updateVehicle, applyVehicleCollision } from './vehicles.js';
@@ -9,12 +10,19 @@ import { createAudio } from './audio.js';
 import { createHud } from './hud.js';
 import { createMenus } from './menu.js';
 import { createSave } from './save.js';
+import { createPedestrians } from './pedestrians.js';
+import { createShotDirector } from './shots.js';
+import { createEffects } from './effects.js';
 
 const THREE = globalThis.THREE;
 const MAX_FRAME = 0.05;
+const SHOT_READY_FRAME = 60;
+const weaponRay = new THREE.Raycaster();
+const weaponDirection = new THREE.Vector3();
+const weaponOrigin = new THREE.Vector3();
 const params = new URLSearchParams(location.search);
-const parsedSeed = Number.parseInt(params.get('seed') ?? '613', 10);
-const rng = createRng(Number.isFinite(parsedSeed) ? parsedSeed : 613);
+const parsedSeed = parseSeed(params.get('seed') ?? '613');
+const rng = createRng(parsedSeed);
 const initialCanvas = document.getElementById('game');
 const hudRoot = document.getElementById('hud');
 const titleOverlay = document.getElementById('title');
@@ -44,6 +52,8 @@ const playerController = createPlayer(
 );
 const { player, move, syncVehicle, enter, exit, respawn } = playerController;
 const traffic = createTraffic(world.scene, world.city.roadGraph, rng);
+const pedestrians = createPedestrians(world.scene, rng);
+const effects = createEffects(world.scene, rng);
 const playerCars = [];
 const starterCars = [
   ['sedan', -100, 12, 0],
@@ -67,17 +77,20 @@ let weapon = 'Unarmed';
 let ammo = 0;
 let reserveAmmo = 0;
 let shotPaints = 0;
-let lastVehicleSpeed = 0;
 let damageFlash = 0;
+let pursuit = 0;
+let shotReady = false;
 let activeOutcome = null;
 const weaponNames = ['Sidearm', 'Compact SMG', 'Longarm'];
-const districtLabel = document.getElementById('district');
 const fallbackToast = document.getElementById('toast');
 const missionPoint = { x: 165, z: -5 };
+window.__SHOT_READY__ = shotReady;
 
 hud.setMoney(progress.money);
 audio.setStation(radioName);
+audio.setVolume(progress.settings.volume);
 world.setWeather(progress.settings.weather);
+hud.setWeather(progress.settings.weather);
 if (progress.missions.includes('fountain-arrival')) {
   hud.setObjective('SUNSET SPRINT', 'Choose a car and follow the coast');
   hud.setMissionBlip(null);
@@ -94,6 +107,14 @@ function showToast(message, duration = 2.4) {
 }
 
 function setMode(nextMode) {
+  if (nextMode === 'paused' && mode === 'playing') {
+    const focus = player.inVehicle ? player.inVehicle.root.position : player.position;
+    world.camera.fov = 57;
+    world.camera.position.y += 1.8;
+    world.camera.position.add(new THREE.Vector3(-2.2, 0, 1.3));
+    world.camera.lookAt(focus.x, focus.y + 0.5, focus.z);
+    world.camera.updateProjectionMatrix();
+  }
   mode = nextMode;
   titleOverlay.hidden = nextMode !== 'title' || activeOutcome !== null;
   pauseOverlay.hidden = nextMode !== 'paused' || activeOutcome !== null;
@@ -129,12 +150,17 @@ function begin() {
   }
   player.inVehicle = null;
   player.avatar.visible = true;
+  player.velocity.set(0, 0, 0);
+  player.vertical = 0;
+  player.grounded = true;
   player.position.set(-100, 0, 0);
   player.cameraYaw = 0;
   player.yaw = 0;
   elapsed = 0;
   wanted = 0;
   wantedDecay = 0;
+  pursuit = 0;
+  hud.setPursuit(0);
   damageFlash = 0;
   player.health = 1;
   player.armor = 0.35;
@@ -148,6 +174,7 @@ function begin() {
 }
 
 function restart() {
+  input.clear();
   save.load();
   begin();
   hud.setMoney(save.getState().money);
@@ -205,8 +232,35 @@ function fireWeapon() {
   }
   ammo -= 1;
   audio.shot(player.weapon);
-  damageFlash = 0.08;
-  showToast('Shot fired', 0.55);
+  const muzzle = player.position.clone();
+  muzzle.y += 1.25;
+  muzzle.x += Math.sin(player.yaw) * 0.7;
+  muzzle.z -= Math.cos(player.yaw) * 0.7;
+  effects.burst(muzzle, { count: 5, speed: 4.5, kind: 'spark' });
+  weaponOrigin.copy(player.position);
+  weaponOrigin.y += 1.36;
+  const pitch = player.cameraPitch;
+  weaponDirection.set(
+    Math.sin(player.cameraYaw) * Math.cos(pitch),
+    -Math.sin(pitch),
+    -Math.cos(player.cameraYaw) * Math.cos(pitch),
+  ).normalize();
+  weaponRay.set(weaponOrigin, weaponDirection);
+  weaponRay.far = 105;
+  const targets = [
+    ...world.city.colliders.map((collider) => collider.mesh),
+    ...traffic.traffic.map((car) => car.root),
+    ...playerCars.map((car) => car.root),
+  ];
+  const hit = weaponRay.intersectObjects(targets, true)[0];
+  if (hit) {
+    effects.burst(hit.point, { count: 10, speed: 6, kind: 'ember' });
+    damageFlash = Math.max(damageFlash, 0.24);
+    showToast('Impact · ' + Math.round(hit.distance) + ' m', 0.7);
+  }
+  player.aiming = true;
+  world.camera.position.add(new THREE.Vector3((rng() - 0.5) * 0.055, (rng() - 0.5) * 0.04, (rng() - 0.5) * 0.055));
+  showToast('Shot fired · ' + ammo + ' rounds left', 0.55);
   hud.setWeapon(weapon, ammo, reserveAmmo);
 }
 
@@ -239,7 +293,8 @@ function handleActions() {
     equipWeapon(2);
   }
   if (pressed.has(ACTION.RELOAD) && mode === 'playing') {
-    const needed = Math.max(0, (player.weapon === 1 ? 30 : 12) - ammo);
+    const magazineCapacity = player.weapon === 1 ? 30 : player.weapon === 2 ? 6 : 12;
+    const needed = Math.max(0, magazineCapacity - ammo);
     const loaded = Math.min(needed, reserveAmmo);
     ammo += loaded;
     reserveAmmo -= loaded;
@@ -258,10 +313,12 @@ function handleActions() {
   }
   if (pressed.has(ACTION.DAY)) {
     dayCycle = !dayCycle;
+    world.setCycleEnabled(dayCycle);
     save.updateSettings({ dayCycle });
   }
   if (pressed.has(ACTION.WEATHER)) {
     const weather = world.toggleWeather();
+    hud.setWeather(weather);
     save.updateSettings({ weather });
     showToast(weather === 'rain' ? 'Rain moving in' : 'The clouds are clearing');
   }
@@ -294,7 +351,7 @@ function hudState() {
     .map((car) => ({ x: car.root.position.x, z: car.root.position.z }));
   return {
     position,
-    heading: player.cameraYaw,
+    heading: current ? current.yaw : player.cameraYaw,
     district,
     districts: world.city.districtZones.map((entry) => ({
       name: entry.name,
@@ -303,7 +360,7 @@ function hudState() {
     })),
     police,
     mission: save.getState().missions.includes('fountain-arrival') ? null : missionPoint,
-    wanted,
+    wanted: params.get('shot') === 'end' ? 4 : wanted,
     health: player.health,
     armor: player.armor,
     damage: damageFlash,
@@ -312,6 +369,8 @@ function hudState() {
     reserve: reserveAmmo,
     driving: Boolean(current),
     speed,
+    weather: world.weather,
+    pursuit: pursuit * 100,
   };
 }
 
@@ -322,6 +381,10 @@ function respawnAt(point) {
   setMode('playing');
   player.health = 1;
   player.armor = 0.35;
+  pursuit = 0;
+  hud.setWantedLevel(0);
+  hud.setHealth(player.health);
+  hud.setArmor(player.armor);
 }
 
 function updateVehicleSimulation(dt) {
@@ -341,6 +404,7 @@ function updateVehicleSimulation(dt) {
     const distance = car.root.position.distanceToSquared(obstacle.root.position);
     if (distance < 8 && applyVehicleCollision(car, vehicleSpeed)) {
       obstacle.speed *= 0.45;
+      effects.burst(obstacle.root.position, { count: 14, speed: 6, kind: 'spark' });
       wanted = Math.min(5, wanted + 1);
       damageFlash = 0.42;
       audio.crash(Math.max(0.4, vehicleSpeed / 20));
@@ -359,6 +423,7 @@ function updateVehicleSimulation(dt) {
         [Math.abs(car.root.position.z - (collider.maxZ + 1.3)), 'z', collider.maxZ + 1.3],
       ].sort((left, right) => left[0] - right[0]);
       car.root.position[sides[0][1]] = sides[0][2];
+      effects.burst(car.root.position.clone().setY(0.8), { count: 12, speed: 5.5, kind: 'spark' });
       wanted = Math.min(5, wanted + 1);
       damageFlash = 0.55;
       audio.crash(Math.max(0.35, vehicleSpeed / 24));
@@ -369,17 +434,22 @@ function updateVehicleSimulation(dt) {
   if (car.type === 'police' && Math.floor(elapsed * 4) % 2 === 0) {
     audio.siren(true, Math.sin(car.root.position.x * 0.01));
   }
-  lastVehicleSpeed = vehicleSpeed;
   syncVehicle(dt, world);
 }
 
 function updateWanted(dt) {
-  if (wanted > 0) {
-    wantedDecay += dt;
-    if (wantedDecay > 22) {
-      wanted -= 1;
-      wantedDecay = 0;
-    }
+  const targetPosition = player.inVehicle ? player.inVehicle.root.position : player.position;
+  const policeClose = wanted > 0 && traffic.policeNearby(targetPosition, player.inVehicle ? 22 : 16);
+  const exposed = !player.inVehicle && Math.hypot(player.velocity.x, player.velocity.z) < 0.8;
+  pursuit = policeClose && exposed
+    ? Math.min(1, pursuit + dt / WORLD.pursuitGraceSeconds)
+    : Math.max(0, pursuit - dt / 2.4);
+  hud.setPursuit(pursuit * 100);
+  if (pursuit >= 1 && wanted >= 3) {
+    activeOutcome = 'wasted';
+    menus.showOutcome('wasted');
+    setMode('busted');
+    return;
   }
   if (wanted >= 5) {
     wantedDecay += dt;
@@ -389,6 +459,15 @@ function updateWanted(dt) {
       menus.showOutcome('wasted');
       setMode('busted');
     }
+  } else if (wanted > 0 && !policeClose) {
+    wantedDecay += dt;
+    if (wantedDecay > 22) {
+      wanted -= 1;
+      wantedDecay = 0;
+      hud.setWantedLevel(wanted);
+    }
+  } else if (policeClose) {
+    wantedDecay = 0;
   }
 }
 
@@ -402,6 +481,8 @@ function checkMissionProgress() {
   hud.setObjective('MISSION COMPLETE', 'Sunset Sprint is waiting on the coast');
   hud.setMissionBlip(null);
   hud.showToast('Fountain reached · $500', 4);
+  hud.showDialogue('MARA', 'You made it before the last light. The coast is open.');
+  hud.setPursuit(0);
   activeOutcome = 'complete';
   menus.showOutcome('complete');
   setMode('paused');
@@ -410,6 +491,7 @@ function checkMissionProgress() {
 function simulate(dt) {
   elapsed += dt;
   audio.update(dt);
+  effects.update(dt);
   world.update(dt, dayCycle, player.position);
   handleActions();
   if (mode !== 'playing') {
@@ -420,8 +502,13 @@ function simulate(dt) {
     move(dt, input, world);
     audio.engine(0, 0, false);
   }
-  traffic.update(dt, player.position, player.inVehicle);
+  traffic.update(dt, player.position, player.inVehicle, wanted);
+  pedestrians.update(dt, player.position, [player.inVehicle, ...traffic.traffic].filter(Boolean));
   updateWanted(dt);
+  if (mode !== 'playing') {
+    hud.update(hudState(), dt);
+    return;
+  }
   checkMissionProgress();
   damageFlash = Math.max(0, damageFlash - dt * 1.8);
   toastTimer = Math.max(0, toastTimer - dt);
@@ -441,26 +528,18 @@ function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(Math.max(0, (now - frame.last) / 1000 || 0), MAX_FRAME);
   frame.last = now;
-  if (params.has('shot')) {
-    if (shotPaints === 0) {
-      begin();
-      player.position.set(0, 0, 0);
-      player.cameraYaw = 0.8;
-      for (let count = 0; count < 8; count += 1) {
-        simulate(1 / 60);
-      }
-    }
-    if (params.get('shot') === 'drive') {
-      enter(playerCars[0]);
-      playerCars[0].root.position.set(-17, 0, -20);
-      playerCars[0].yaw = -0.5;
-      playerCars[0].root.rotation.y = -0.5;
-      playerCars[0].speed = 18;
+  if (shotDirector.shot) {
+    shotDirector.update(1 / 60);
+    effects.update(1 / 60);
+    if (shotDirector.shot !== 'start') {
+      hud.update(hudState(), 1 / 60);
+      audio.update(1 / 60);
     }
     world.renderer.render(world.scene, world.camera);
     shotPaints += 1;
-    if (shotPaints >= 2) {
-      window.__shotReady = true;
+    if (shotPaints >= SHOT_READY_FRAME) {
+      shotReady = true;
+      window.__SHOT_READY__ = true;
     }
     return;
   }
@@ -484,6 +563,7 @@ const menus = createMenus({
     setMode('paused');
   },
 }, () => save.getState());
+const shotDirector = createShotDirector({ world, player, enter, playerCars, traffic, pedestrians, hud, rng });
 
 document.getElementById('start').addEventListener('click', audio.resume, { once: true });
 document.addEventListener('pointerlockchange', () => {
@@ -510,11 +590,27 @@ window.addEventListener('vista-bay-mission-complete', (event) => {
 setMode('title');
 hud.setMoney(save.getState().money);
 hud.setWantedLevel(wanted);
-if (progress.selectedWeapon !== 'Unarmed') {
+if (!shotDirector.shot && progress.selectedWeapon !== 'Unarmed') {
   const restoredWeapon = weaponNames.indexOf(progress.selectedWeapon);
   if (restoredWeapon >= 0) {
     equipWeapon(restoredWeapon);
   }
 }
 hud.update(hudState(), 0);
+if (shotDirector.shot) {
+  if (shotDirector.shot !== 'start') {
+    begin();
+  }
+  shotDirector.stage();
+  hud.setWeather(world.weather);
+  if (shotDirector.shot === 'start') {
+    setMode('title');
+    titleOverlay.hidden = false;
+    hudRoot.hidden = true;
+  } else {
+    setMode('playing');
+    titleOverlay.hidden = true;
+    hudRoot.hidden = false;
+  }
+}
 requestAnimationFrame(frame);

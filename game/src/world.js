@@ -3,9 +3,10 @@ import { COLORS, WORLD, CAMERA } from './config.js';
 import { createCity } from './city.js';
 
 const THREE = globalThis.THREE;
+const WET_ROAD_ROUGHNESS = 0.38;
 
 function createRain(scene, rng) {
-  const count = 420;
+  const count = WORLD.rainParticleCount;
   const positions = new Float32Array(count * 6);
   const velocities = new Float32Array(count);
   const geometry = new THREE.BufferGeometry();
@@ -99,6 +100,8 @@ export function createWorld(rng) {
     wetRoads = weather === 'rain';
     city.waterMat.roughness = wetRoads ? 0.12 : baseWaterRoughness;
     city.roadMaterial.color.set(wetRoads ? '#202c39' : baseRoadColor);
+    city.roadMaterial.roughness = wetRoads ? WET_ROAD_ROUGHNESS : 0.94;
+    rain.material.opacity = wetRoads ? 0.48 : 0.12;
   }
 
   function toggleWeather() {
@@ -126,9 +129,9 @@ export function createWorld(rng) {
       values[offset + 1] -= rain.velocities[index] * dt;
       values[offset + 4] -= rain.velocities[index] * dt;
       if (values[offset + 1] < 0) {
-        values[offset] = position.x + rng.range(-150, 150);
+        values[offset] = rng.range(-115, 115);
         values[offset + 1] = rng.range(38, 72);
-        values[offset + 2] = position.z + rng.range(-150, 150);
+        values[offset + 2] = rng.range(-115, 115);
         values[offset + 3] = values[offset] - 0.4;
         values[offset + 4] = values[offset + 1] - 2.4;
         values[offset + 5] = values[offset + 2];
@@ -169,16 +172,48 @@ export function createWorld(rng) {
 
   function setTimeOfDay(fraction) {
     fixedTime = THREE.MathUtils.euclideanModulo(fraction, 1);
+    update(0, false);
+  }
+
+  function setCycleEnabled(enabled) {
+    if (enabled) {
+      resumeCycle();
+      return true;
+    }
+    setTimeOfDay(cycleFraction(true));
+    return false;
   }
 
   function resumeCycle() {
     fixedTime = null;
+    elapsed %= WORLD.sunCycleSeconds;
   }
 
   function resize() {
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
+  }
+
+  function dispose() {
+    const geometries = new Set();
+    const materials = new Set();
+    const textures = new Set();
+    scene.traverse((object) => {
+      if (object.geometry) geometries.add(object.geometry);
+      const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of objectMaterials) {
+        if (!material) continue;
+        materials.add(material);
+        for (const value of Object.values(material)) {
+          if (value?.isTexture) textures.add(value);
+        }
+      }
+    });
+    for (const geometry of geometries) geometry.dispose();
+    for (const material of materials) material.dispose();
+    for (const texture of textures) texture.dispose();
+    renderer.dispose();
   }
 
   return {
@@ -192,6 +227,8 @@ export function createWorld(rng) {
     toggleWeather,
     setTimeOfDay,
     resumeCycle,
+    setCycleEnabled,
+    dispose,
     get weather() { return weather; },
     get nightFactor() { return nightFactor; },
     resize,

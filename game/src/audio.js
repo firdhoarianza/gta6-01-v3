@@ -2,15 +2,17 @@ const STATIONS = [
   { name: 'Sable FM', style: 'synthwave', root: 110, notes: [0, 7, 12, 10, 3, 7, 15, 12] },
   { name: 'Citrus AM', style: 'lofi', root: 82.41, notes: [0, 3, 7, 10, 5, 8, 12, 7] },
   { name: 'Coastline Radio', style: 'house', root: 55, notes: [0, 7, 10, 12, 3, 10, 14, 7] },
+  { name: 'Bayline 88', style: 'bossa', root: 73.42, notes: [0, 5, 7, 12, 10, 7, 3, 5] },
 ];
 
 const WEAPON_TONES = [170, 105, 70];
+const MASTER_VOLUME = 0.76;
 
 function makeNoiseBuffer(context, seconds = 1) {
   const buffer = context.createBuffer(1, context.sampleRate * seconds, context.sampleRate);
   const samples = buffer.getChannelData(0);
   for (let index = 0; index < samples.length; index += 1) {
-    samples[index] = Math.random() * 2 - 1;
+    samples[index] = Math.sin(index * 12.9898) * 0.5 + Math.sin(index * 78.233) * 0.25;
   }
   return buffer;
 }
@@ -38,6 +40,7 @@ export function createAudio(onStation = () => {}) {
       setStation() {},
       station: () => STATIONS[0].name,
       update() {},
+      setVolume() {},
     };
   }
 
@@ -48,10 +51,13 @@ export function createAudio(onStation = () => {}) {
   const effectsBus = context.createGain();
   const ambienceBus = context.createGain();
   const noiseBuffer = makeNoiseBuffer(context, 2);
-  master.gain.value = 0.76;
+  master.gain.value = MASTER_VOLUME;
   musicBus.gain.value = 0.56;
   effectsBus.gain.value = 0.72;
   ambienceBus.gain.value = 0.2;
+  const duckGain = context.createGain();
+  musicBus.connect(duckGain);
+  duckGain.gain.value = 0.82;
   compressor.threshold.value = -18;
   compressor.knee.value = 18;
   compressor.ratio.value = 3.2;
@@ -59,7 +65,7 @@ export function createAudio(onStation = () => {}) {
   compressor.release.value = 0.22;
   master.connect(compressor);
   compressor.connect(context.destination);
-  musicBus.connect(master);
+  duckGain.connect(master);
   effectsBus.connect(master);
   ambienceBus.connect(master);
 
@@ -74,6 +80,7 @@ export function createAudio(onStation = () => {}) {
   let sequencerTimer = 0;
   let sequencerStep = 0;
   let stepLength = 60 / 104 / 4;
+  let radioEnabled = true;
 
   function resume() {
     if (context.state === 'suspended') {
@@ -226,7 +233,7 @@ export function createAudio(onStation = () => {}) {
     const panner = context.createStereoPanner();
     panner.pan.value = Math.max(-1, Math.min(1, pan));
     const gain = context.createGain();
-    gain.gain.value = 0.16;
+    gain.gain.value = 0.09;
     gain.connect(panner);
     panner.connect(effectsBus);
     const oscillator = context.createOscillator();
@@ -307,6 +314,17 @@ export function createAudio(onStation = () => {}) {
         tone(noteFrequency(station.root * 4, leadNote), 0.09, 'square', 0.04, musicBus);
       }
     }
+    if (station.style === 'bossa') {
+      if (step % 4 === 0) {
+        tone(noteFrequency(station.root, scaleNote - 12), 0.25, 'triangle', 0.07, musicBus);
+      }
+      if (step % 4 === 2) {
+        tone(noteFrequency(station.root * 2, scaleNote + 7), 0.16, 'sine', 0.04, musicBus);
+      }
+      if (step % 2 === 1) {
+        tone(noteFrequency(station.root * 4, leadNote - 12), 0.11, 'triangle', 0.023, musicBus);
+      }
+    }
     if (step % 4 === 0) {
       drum('kick');
     } else if (step % 4 === 2 && station.style !== 'house') {
@@ -322,12 +340,18 @@ export function createAudio(onStation = () => {}) {
     stationIndex = (index + STATIONS.length) % STATIONS.length;
     sequencerStep = 0;
     const station = STATIONS[stationIndex];
-    stepLength = 60 / (station.style === 'house' ? 122 : station.style === 'lofi' ? 84 : 104) / 4;
+    stepLength = 60 / (station.style === 'house' ? 122 : station.style === 'lofi' ? 84 : station.style === 'bossa' ? 96 : 104) / 4;
     onStation(station.name);
   }
 
   function radio() {
     setStation(stationIndex + 1);
+  }
+
+  function toggleRadio() {
+    radioEnabled = !radioEnabled;
+    setTarget(musicBus.gain, radioEnabled ? 0.56 : 0, context.currentTime, 0.18);
+    return radioEnabled;
   }
 
   function selectStation(name) {
@@ -339,7 +363,7 @@ export function createAudio(onStation = () => {}) {
 
   function update(dt) {
     sirenTimer = Math.max(0, sirenTimer - dt);
-    if (context.state !== 'running') {
+    if (context.state !== 'running' || !radioEnabled) {
       return;
     }
     sequencerTimer += dt;
@@ -354,5 +378,10 @@ export function createAudio(onStation = () => {}) {
     return STATIONS[stationIndex].name;
   }
 
-  return { resume, engine, skid, shot, siren, horn, crash, pickup, footstep, radio, setStation: selectStation, station, update };
+  function setVolume(value) {
+    const normalized = Math.max(0, Math.min(1, value));
+    setTarget(master.gain, normalized, context.currentTime, 0.12);
+  }
+
+  return { resume, engine, skid, shot, siren, horn, crash, pickup, footstep, radio, toggleRadio, setStation: selectStation, setVolume, station, update };
 }
