@@ -158,5 +158,5 @@ export function createCity(scene, rng) {
   for (let i = 0; i < 36; i++) { const x = rng.range(-560, 560), z = rng.range(-560, 475); if (Math.abs((x + 600) % 100 - 50) < 29 || Math.abs((z + 600) % 100 - 50) < 29) continue; const car = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.15, 4.4), new THREE.MeshStandardMaterial({ color: rng.pick(parkedColors), roughness: 0.42, metalness: 0.2 })); car.position.set(x, 0.65, z); car.rotation.y = rng.pick([0, Math.PI / 2]); scene.add(car); }
 
   spawnPoints.push({ x: -38, z: 12, yaw: 0 });
-  return { roadGraph, spawnPoints, colliders, districts, districtZones: DISTRICTS, ocean, waterMat, districtList: DISTRICTS.map(({ name }) => name) };
+  return { roadGraph, spawnPoints, colliders, districts, districtZones: DISTRICTS, ocean, waterMat, roadMaterial: asphalt, lampMaterial: bulbMat, districtList: DISTRICTS.map(({ name }) => name) };
 }

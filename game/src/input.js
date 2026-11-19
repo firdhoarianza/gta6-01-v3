@@ -1,10 +1,10 @@
 // Pointer lock + edge-triggered key presses and continuously held driving/walking controls.
-export const ACTION = { INTERACT: 'interact', WEAPON1: 'weapon1', WEAPON2: 'weapon2', WEAPON3: 'weapon3', RELOAD: 'reload', HORN: 'horn', RADIO: 'radio', PAUSE: 'pause', ACTIVITY: 'activity', DAY: 'day', CONFIRM: 'confirm' };
+export const ACTION = { INTERACT: 'interact', WEAPON1: 'weapon1', WEAPON2: 'weapon2', WEAPON3: 'weapon3', RELOAD: 'reload', HORN: 'horn', RADIO: 'radio', PAUSE: 'pause', ACTIVITY: 'activity', DAY: 'day', WEATHER: 'weather', FIRE: 'fire', CONFIRM: 'confirm' };
 const KEYS = {
   KeyE: ACTION.INTERACT, Digit1: ACTION.WEAPON1, Digit2: ACTION.WEAPON2, Digit3: ACTION.WEAPON3,
   KeyR: ACTION.RELOAD, KeyH: ACTION.HORN, KeyN: ACTION.RADIO, KeyP: ACTION.PAUSE, Escape: ACTION.PAUSE,
   Enter: ACTION.CONFIRM,
-  KeyM: ACTION.ACTIVITY, KeyT: ACTION.DAY,
+  KeyM: ACTION.ACTIVITY, KeyT: ACTION.DAY, KeyY: ACTION.WEATHER,
 };
 
 export function createInput(canvas) {
@@ -12,6 +12,16 @@ export function createInput(canvas) {
   const pointer = { dx: 0, dy: 0, locked: false };
   canvas.addEventListener('click', () => { if (document.pointerLockElement !== canvas) canvas.requestPointerLock?.(); });
   document.addEventListener('pointerlockchange', () => { pointer.locked = document.pointerLockElement === canvas; });
+  canvas.addEventListener('mousedown', (event) => {
+    down.add('Mouse' + (event.button === 2 ? 'Right' : 'Left'));
+    if (event.button === 0) {
+      pressed.add(ACTION.FIRE);
+    }
+  });
+  window.addEventListener('mouseup', (event) => {
+    down.delete('Mouse' + (event.button === 2 ? 'Right' : 'Left'));
+  });
+  canvas.addEventListener('contextmenu', (event) => event.preventDefault());
   document.addEventListener('mousemove', (event) => { if (pointer.locked) { pointer.dx += event.movementX; pointer.dy += event.movementY; } });
   window.addEventListener('keydown', (event) => {
     if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.code)) event.preventDefault();
