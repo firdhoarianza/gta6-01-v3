@@ -1,134 +1,110 @@
-// Boot and the one loop: input is read every frame, the world advances in fixed 1/60 s steps
-// (several in a slow frame, none in a fast one), and the renderer paints what is there. The game
-// moves between four screens: title, play, paused and game over.
-//
-// ?seed=N fixes the falling pattern. ?shot=start|play|end (with &seed=N) stages that scene
-// instead of running the loop, paints it twice and sets window.__shotReady for a screenshot.
-import { BEST_KEY, LIVES, STEP } from './config.js';
-import { createRandom } from './random.js';
-import { createWorld, EVENT_HIT, EVENT_OVER } from './world.js';
-import { ACTION_CONFIRM, ACTION_PAUSE, createInput } from './input.js';
-import { createRenderer, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
-import { stageShot } from './shots.js';
+// Bootstrap, overlays, deterministic shots and bounded frame loop for Vista Bay — Low Tide.
+import { ACTION, createInput } from './input.js';
+import { createRng } from './rng.js';
+import { createWorld } from './world.js';
+import { createPlayer } from './player.js';
+import { createVehicle, updateVehicle, applyVehicleCollision } from './vehicles.js';
+import { createTraffic } from './traffic.js';
+import { createAudio } from './audio.js';
 
-/** The longest frame the loop catches up on; a longer stall (a hidden tab) is dropped, not replayed. */
-const MAX_FRAME = 0.25;
+const THREE = globalThis.THREE;
+const MAX_FRAME = 0.05;
+const params = new URLSearchParams(location.search);
+const seedValue = Number.parseInt(params.get('seed') ?? '613', 10);
+const rng = createRng(Number.isFinite(seedValue) ? seedValue : 613);
+const canvas = document.getElementById('game'), hud = document.getElementById('hud'), title = document.getElementById('title'), pause = document.getElementById('pause'), busted = document.getElementById('busted');
+const world = createWorld(rng);
+world.renderer.domElement.id = 'game';
+world.renderer.domElement.setAttribute('aria-label', 'Vista Bay open world');
+canvas.replaceWith(world.renderer.domElement);
+const gameCanvas = world.renderer.domElement, input = createInput(gameCanvas);
+const { player, move, syncVehicle, enter, exit } = createPlayer(world.scene, world.city.spawnPoints[0], world.city.colliders, world.camera);
+const traffic = createTraffic(world.scene, world.city.roadGraph, rng);
+const audio = createAudio();
+const playerCars = [];
+for (const [type, x, z, yaw] of [['sedan', -100, 12, 0], ['sports', -12, 100, Math.PI / 2], ['pickup', 100, -12, -Math.PI / 2]]) { const car = createVehicle(type, x, z, yaw); car.playerOwned = true; world.scene.add(car.root); playerCars.push(car); }
 
-const params = new URLSearchParams(window.location.search);
-const shot = params.get('shot');
-const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
-const seed = Number.isInteger(seedParam) ? seedParam : Math.floor(Math.random() * 4294967296);
+let mode = 'title', elapsed = 0, wanted = 0, wantedFiveTimer = 0, radio = 'Sable FM', dayCycle = true, weapon = 'Unarmed', toastTimer = 0, shotPaints = 0;
+const toast = document.getElementById('toast');
+const speed = document.getElementById('speed'), district = document.getElementById('district'), weaponLabel = document.getElementById('weapon'), radioLabel = document.getElementById('radio'), stars = document.getElementById('stars');
+const weaponNames = ['Sidearm', 'Compact SMG', 'Longarm'];
 
-const canvas = document.getElementById('game');
-const status = document.getElementById('status');
-const world = createWorld(createRandom(seed));
-const renderer = createRenderer(canvas);
-
-function readBest() {
-  try {
-    return Number.parseInt(window.localStorage.getItem(BEST_KEY) ?? '0', 10) || 0;
-  } catch {
-    return 0;
-  }
+function showToast(message) { toast.textContent = message; toast.classList.add('visible'); toastTimer = 2.4; }
+function setMode(next) {
+  mode = next; title.hidden = next !== 'title'; pause.hidden = next !== 'paused'; busted.hidden = next !== 'busted'; hud.hidden = next !== 'playing';
+  if (next === 'title' || next === 'paused' || next === 'busted') document.exitPointerLock?.();
 }
-
-function saveBest(value) {
-  try {
-    window.localStorage.setItem(BEST_KEY, String(value));
-  } catch {
-    // Storage can be off (private windows): the best score then lasts this visit only.
-  }
+function begin() { if (player.inVehicle) player.inVehicle.occupied = false; player.inVehicle = null; player.avatar.visible = true; player.position.set(-100, 0, 0); player.cameraYaw = 0; player.yaw = 0; elapsed = 0; wanted = 0; wantedFiveTimer = 0; setMode('playing'); }
+function togglePause() { if (mode === 'playing') setMode('paused'); else if (mode === 'paused') setMode('playing'); }
+function useInteraction() {
+  if (player.inVehicle) { exit(); showToast('On foot'); return; }
+  const owned = playerCars.filter((car) => !car.occupied).map((car) => car.root.position.distanceToSquared(player.position) < 34 ? car : null).find(Boolean);
+  const near = traffic.nearest(player.position, 5.7) ?? owned;
+  if (!near) { showToast('No ride nearby'); return; }
+  if (near.ai) traffic.remove(near);
+  enter(near); showToast('Stole ' + near.name); wanted = Math.min(5, wanted + (near.type === 'police' ? 2 : 1));
 }
-
-function runShot(name) {
-  const scene = stageShot(name, world);
-  let painted = 0;
-  function paint() {
-    renderer.draw(world.state, scene.screen, scene.best);
-    painted += 1;
-    if (painted < 2) requestAnimationFrame(paint);
-    else window.__shotReady = true;
-  }
-  requestAnimationFrame(paint);
+function actions() {
+  const pressed = input.takeAll();
+  if (pressed.has(ACTION.PAUSE)) { if (mode === 'title') begin(); else togglePause(); }
+  if (pressed.has(ACTION.CONFIRM)) { if (mode === 'title' || mode === 'busted') begin(); else if (mode === 'paused') setMode('playing'); }
+  if (pressed.has(ACTION.INTERACT) && mode === 'playing') useInteraction();
+  if (pressed.has(ACTION.WEAPON1)) { player.weapon = 0; weapon = weaponNames[0]; showToast('Sidearm selected'); }
+  if (pressed.has(ACTION.WEAPON2)) { player.weapon = 1; weapon = weaponNames[1]; showToast('Compact SMG selected'); }
+  if (pressed.has(ACTION.WEAPON3)) { player.weapon = 2; weapon = weaponNames[2]; showToast('Longarm selected'); }
+  if (pressed.has(ACTION.RELOAD)) showToast('Magazine checked');
+  if (pressed.has(ACTION.RADIO)) { radio = radio === 'Sable FM' ? 'Citrus AM' : 'Sable FM'; audio.radio(); showToast('Radio: ' + radio); }
+  if (pressed.has(ACTION.ACTIVITY)) { player.activity = player.activity === 'Free roam' ? 'Street race' : 'Free roam'; showToast(player.activity === 'Street race' ? 'Activity: Sunset Sprint' : 'Activity cleared'); }
+  if (pressed.has(ACTION.DAY)) dayCycle = !dayCycle;
+  if (pressed.has(ACTION.HORN)) { if (player.inVehicle) { player.inVehicle.setHorn(); audio.horn(); } showToast('Honk!'); }
 }
-
-function runGame() {
-  const input = createInput(canvas);
-  let screen = SCREEN_TITLE;
-  let best = readBest();
-  let accumulator = 0;
-  let last = performance.now();
-
-  // Screen readers (and anyone watching the page's text) hear the screen changes and each hit.
-  function announce(message) {
-    status.textContent = message;
-  }
-
-  function startGame() {
-    world.reset();
-    accumulator = 0;
-    screen = SCREEN_PLAY;
-    announce(`Playing. ${LIVES} lives.`);
-  }
-
-  function endGame() {
-    screen = SCREEN_OVER;
-    if (world.state.score > best) {
-      best = world.state.score;
-      saveBest(best);
-    }
-    announce(`Game over. Score ${world.state.score}. Best ${best}.`);
-  }
-
-  function handleActions() {
-    const actions = input.takeActions();
-    if (actions & ACTION_CONFIRM && (screen === SCREEN_TITLE || screen === SCREEN_OVER)) startGame();
-    else if (actions & ACTION_PAUSE && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
-      announce('Paused.');
-    } else if (actions & (ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN_PAUSED) {
-      screen = SCREEN_PLAY;
-      announce('Playing.');
-    }
-  }
-
-  function step() {
-    if (screen === SCREEN_TITLE) {
-      world.step(STEP, 0, true);
-      return;
-    }
-    const events = world.step(STEP, input.direction(), false);
-    if (events & EVENT_OVER) endGame();
-    else if (events & EVENT_HIT) announce(world.state.lives === 1 ? 'Hit. 1 life left.' : `Hit. ${world.state.lives} lives left.`);
-  }
-
-  function frame(now) {
-    requestAnimationFrame(frame);
-    accumulator += Math.min((now - last) / 1000, MAX_FRAME);
-    last = now;
-    handleActions();
-    if (screen === SCREEN_TITLE || screen === SCREEN_PLAY) {
-      while (accumulator >= STEP && (screen === SCREEN_TITLE || screen === SCREEN_PLAY)) {
-        step();
-        accumulator -= STEP;
+function updateHud() {
+  const current = player.inVehicle;
+  speed.textContent = current ? Math.round(Math.abs(current.speed) * 3.6) + ' KM/H' : 'ON FOOT';
+  const x = player.position.x, z = player.position.z;
+  const zone = world.city.districtZones.find((d) => x >= d.x[0] && x <= d.x[1] && z >= d.z[0] && z <= d.z[1]);
+  district.textContent = zone?.name ?? 'Vista Bay'; weaponLabel.textContent = weapon; radioLabel.textContent = radio; stars.textContent = '★'.repeat(wanted) + '☆'.repeat(5 - wanted);
+}
+function simulate(dt) {
+  elapsed += dt; world.update(dt, dayCycle); actions();
+  if (mode !== 'playing') return;
+  if (player.inVehicle) {
+    const car = player.inVehicle; updateVehicle(car, input, dt);
+    for (const obstacle of traffic.traffic) if (car.root.position.distanceToSquared(obstacle.root.position) < 8 && applyVehicleCollision(car, Math.abs(car.speed))) { obstacle.speed *= 0.45; wanted = Math.min(5, wanted + 1); }
+    for (const collider of world.city.colliders) {
+      if (car.root.position.x > collider.minX - 1 && car.root.position.x < collider.maxX + 1 && car.root.position.z > collider.minZ - 1 && car.root.position.z < collider.maxZ + 1 && applyVehicleCollision(car, Math.abs(car.speed))) {
+        const sides = [
+          [Math.abs(car.root.position.x - (collider.minX - 1.3)), 'x', collider.minX - 1.3],
+          [Math.abs(car.root.position.x - (collider.maxX + 1.3)), 'x', collider.maxX + 1.3],
+          [Math.abs(car.root.position.z - (collider.minZ - 1.3)), 'z', collider.minZ - 1.3],
+          [Math.abs(car.root.position.z - (collider.maxZ + 1.3)), 'z', collider.maxZ + 1.3],
+        ].sort((a, b) => a[0] - b[0]);
+        car.root.position[sides[0][1]] = sides[0][2];
       }
-    } else {
-      accumulator = 0;
     }
-    renderer.draw(world.state, screen, best);
-  }
-
-  // Leaving the tab pauses a running game rather than letting blocks fall unseen.
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
-      announce('Paused.');
-    }
-  });
-
-  announce('Block Dodger. Press Space or click to start.');
-  requestAnimationFrame(frame);
+    car.root.position.x = THREE.MathUtils.clamp(car.root.position.x, -590, 590); car.root.position.z = THREE.MathUtils.clamp(car.root.position.z, -590, 590); syncVehicle(dt, world);
+  } else move(dt, input, world);
+  traffic.update(dt, player.position, player.inVehicle);
+  if (wanted > 0 && Math.floor(elapsed / 18) > Math.floor((elapsed - dt) / 18)) wanted = Math.max(0, wanted - 1);
+  wantedFiveTimer = wanted === 5 ? wantedFiveTimer + dt : 0;
+  if (wantedFiveTimer > 14) { wanted = 0; player.inVehicle = null; respawn(world.city.spawnPoints[0]); setMode('busted'); }
+  toastTimer = Math.max(0, toastTimer - dt); toast.classList.toggle('visible', toastTimer > 0); updateHud();
 }
 
-if (shot) runShot(shot);
-else runGame();
+function frame(now) {
+  requestAnimationFrame(frame); const dt = Math.min(Math.max(0, (now - frame.last) / 1000 || 0), MAX_FRAME); frame.last = now;
+  if (params.has('shot')) {
+    if (shotPaints === 0) { begin(); player.position.set(0, 0, 0); player.cameraYaw = 0.8; for (let i = 0; i < 8; i++) simulate(1 / 60); }
+    if (params.get('shot') === 'drive') { enter(playerCars[0]); playerCars[0].root.position.set(-17, 0, -20); playerCars[0].yaw = -0.5; playerCars[0].root.rotation.y = -0.5; playerCars[0].speed = 18; }
+    world.renderer.render(world.scene, world.camera); shotPaints++; if (shotPaints >= 2) window.__shotReady = true; return;
+  }
+  if (mode === 'title' || mode === 'playing') simulate(dt); else actions();
+  world.renderer.render(world.scene, world.camera);
+}
+frame.last = performance.now();
+document.getElementById('start').addEventListener('click', begin);
+document.getElementById('resume').addEventListener('click', () => setMode('playing'));
+document.getElementById('restart').addEventListener('click', begin);
+window.addEventListener('resize', () => world.resize());
+document.addEventListener('visibilitychange', () => { if (document.hidden && mode === 'playing') setMode('paused'); });
+setMode('title'); updateHud(); requestAnimationFrame(frame);

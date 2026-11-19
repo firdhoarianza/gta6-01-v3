@@ -1,61 +1,13 @@
-// Every tuning number and colour in one place. The playfield is a fixed 1280x720 logical area;
-// the renderer scales it to the window, so no rule below depends on the screen size.
-
-export const FIELD = { width: 1280, height: 720, groundY: 664 };
-
-/** The simulation's fixed step, in seconds: 60 updates a second whatever the display's rate. */
-export const STEP = 1 / 60;
-
-export const PLAYER = {
-  width: 72,
-  height: 24,
-  speed: 560,
-  invulnerable: 1.5,
+// Shared world scale and tuning. Distances are metres; Y is up.
+export const CITY = { size: 1200, half: 600, block: 100, road: 12, avenue: 22, sidewalk: 4, ocean: 4200 };
+export const PLAYER = { walk: 6.2, sprint: 10.8, jump: 7.2, gravity: 20, radius: 0.62, height: 1.8, crouchHeight: 1.15 };
+export const CAMERA = { distance: 8.4, height: 3.1, lookHeight: 1.2, sensitivity: 0.0022, smooth: 7.5, fov: 68 };
+export const VEHICLE = { accel: 19, brake: 28, maxSpeed: 34, reverseSpeed: 10, steer: 2.05, grip: 5.5, driftGrip: 1.35, collision: 0.65 };
+export const WORLD = { fogNear: 260, fogFar: 1450, sunCycleSeconds: 240 };
+export const COLORS = {
+  sky: '#ef8c79', dusk: '#402b57', ocean: '#086f82', water: '#22b4b2', sand: '#ddbd8d',
+  asphalt: '#303540', lane: '#d7b675', sidewalk: '#77777a', grass: '#3d6652',
+  neonPink: '#ff4e9b', neonCyan: '#50e2e2', gold: '#ffc56c', white: '#fff2d9', ink: '#12131c',
+  panel: 'rgba(9,12,22,.82)',
 };
-
-export const LIVES = 3;
-
-export const BLOCK = {
-  minWidth: 40,
-  maxWidth: 110,
-  height: 36,
-  speed: 240,
-  speedPerLevel: 30,
-  speedJitter: 90,
-  interval: 0.55,
-  intervalScale: 0.88,
-  minInterval: 0.14,
-  dodgePoints: 1,
-};
-
-export const COIN = {
-  size: 24,
-  speed: 190,
-  speedPerLevel: 14,
-  interval: 1.4,
-  intervalJitter: 0.8,
-  points: 10,
-};
-
-/** Seconds of play per level, and the last level: speeds and spawn rates stop growing there. */
-export const LEVEL = { seconds: 12, max: 12 };
-
-/** How many falling things can exist at once; the pool is allocated once, at boot. */
-export const POOL_SIZE = 64;
-
-export const PALETTE = {
-  backdrop: '#11141b',
-  sky: '#1b1f2a',
-  ground: '#2a3040',
-  player: '#4fc3f7',
-  block: '#e5534b',
-  coin: '#f2c94c',
-  panel: '#252b38',
-  text: '#eef1f5',
-  muted: '#8b93a3',
-};
-
 export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
-
-/** Where the best score is kept between visits (this browser only). */
-export const BEST_KEY = 'block-dodger.best';

@@ -1,53 +1,31 @@
-// Keyboard and pointer input. Held keys give a steering direction; one-shot presses (start or
-// restart, pause) are queued as bit flags and taken once by the loop, so a press between two
-// frames is never lost and never counted twice.
+// Pointer lock + edge-triggered key presses and continuously held driving/walking controls.
+export const ACTION = { INTERACT: 'interact', WEAPON1: 'weapon1', WEAPON2: 'weapon2', WEAPON3: 'weapon3', RELOAD: 'reload', HORN: 'horn', RADIO: 'radio', PAUSE: 'pause', ACTIVITY: 'activity', DAY: 'day', CONFIRM: 'confirm' };
+const KEYS = {
+  KeyE: ACTION.INTERACT, Digit1: ACTION.WEAPON1, Digit2: ACTION.WEAPON2, Digit3: ACTION.WEAPON3,
+  KeyR: ACTION.RELOAD, KeyH: ACTION.HORN, KeyN: ACTION.RADIO, KeyP: ACTION.PAUSE, Escape: ACTION.PAUSE,
+  Enter: ACTION.CONFIRM,
+  KeyM: ACTION.ACTIVITY, KeyT: ACTION.DAY,
+};
 
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
-
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const CONFIRM = new Set(['Space', 'Enter']);
-const PAUSE = new Set(['KeyP', 'Escape']);
-
-export function createInput(target) {
-  let left = false;
-  let right = false;
-  let actions = 0;
-
+export function createInput(canvas) {
+  const down = new Set(), pressed = new Set();
+  const pointer = { dx: 0, dy: 0, locked: false };
+  canvas.addEventListener('click', () => { if (document.pointerLockElement !== canvas) canvas.requestPointerLock?.(); });
+  document.addEventListener('pointerlockchange', () => { pointer.locked = document.pointerLockElement === canvas; });
+  document.addEventListener('mousemove', (event) => { if (pointer.locked) { pointer.dx += event.movementX; pointer.dy += event.movementY; } });
   window.addEventListener('keydown', (event) => {
-    if (LEFT.has(event.code)) left = true;
-    else if (RIGHT.has(event.code)) right = true;
-    else if (CONFIRM.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_CONFIRM;
-    } else if (PAUSE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PAUSE;
-    } else return;
-    event.preventDefault();
+    if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.code)) event.preventDefault();
+    if (!down.has(event.code) && !event.repeat) { down.add(event.code); const action = KEYS[event.code]; if (action) pressed.add(action); }
   });
-  window.addEventListener('keyup', (event) => {
-    if (LEFT.has(event.code)) left = false;
-    else if (RIGHT.has(event.code)) right = false;
-  });
-  // A key released while the tab is hidden never sends keyup: let go of everything on blur.
-  window.addEventListener('blur', () => {
-    left = false;
-    right = false;
-  });
-  target.addEventListener('pointerdown', () => {
-    actions |= ACTION_CONFIRM;
-  });
-
+  window.addEventListener('keyup', (event) => down.delete(event.code));
+  window.addEventListener('blur', () => { down.clear(); pointer.dx = 0; pointer.dy = 0; });
   return {
-    /** -1 for left, 1 for right, 0 for neither or both. */
-    direction() {
-      return (right ? 1 : 0) - (left ? 1 : 0);
-    },
-    /** The one-shot presses since the last call, as ACTION_* flags. */
-    takeActions() {
-      const taken = actions;
-      actions = 0;
-      return taken;
-    },
+    held(code) { return down.has(code); },
+    axis(positive, negative) { return (down.has(positive) ? 1 : 0) - (down.has(negative) ? 1 : 0); },
+    move() { return { x: this.axis('KeyD', 'KeyA') + this.axis('ArrowRight', 'ArrowLeft'), z: this.axis('KeyS', 'KeyW') + this.axis('ArrowDown', 'ArrowUp') }; },
+    take(action) { const had = pressed.has(action); pressed.delete(action); return had; },
+    takeAll() { const values = new Set(pressed); pressed.clear(); return values; },
+    look() { const delta = { x: pointer.dx, y: pointer.dy }; pointer.dx = 0; pointer.dy = 0; return delta; },
+    get locked() { return pointer.locked; },
   };
 }
