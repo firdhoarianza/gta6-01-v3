@@ -66,7 +66,22 @@ createServer((request, response) => {
     'content-length': size,
     'cache-control': 'no-store',
   });
-  createReadStream(file).pipe(response);
+  const stream = createReadStream(file);
+  stream.on('error', () => {
+    if (response.destroyed) return;
+    if (response.headersSent) {
+      response.destroy();
+      return;
+    }
+    response.writeHead(500).end('read error');
+  });
+  request.on('aborted', () => stream.destroy());
+  request.on('error', () => stream.destroy());
+  response.on('close', () => {
+    if (!response.writableFinished) stream.destroy();
+  });
+  response.on('error', () => stream.destroy());
+  stream.pipe(response);
 }).listen(port, '127.0.0.1', () => {
   console.log(`game/ is on http://localhost:${port}`);
 });

@@ -1,16 +1,13 @@
-// A working gta6-01 entry (Node 22, standard library only): the game is this directory's
-// game/ folder, plain static files a desktop browser loads offline (game/index.html and its ES
-// modules, no library and no network request), and the program hands it in. It copies game/ and
-// screenshots/ from beside this file to /output and writes /output/dossier.json, the summary the
-// judge reads, with the vendored make.fun library. Only the plumbing, not an open world: Block
-// Dodger, a plain 2D canvas game where a paddle dodges falling blocks and catches coins, with a
-// title screen, score, lives and levels, game over and restart, flat colours and no sound. Build
-// your own open-world crime game in its place (three.js or any library you vendor under game/),
-// put your 3 or 4 PNG or JPEG screenshots in screenshots/ (the first by name is the cover) and run it.
+// Vista Bay — Low Tide is an original, static Three.js open-world crime sandbox.
+// This Node 22 entry preflights the offline game and screenshots, then hands them in.
+// It copies game/ and screenshots/ beside this file to the selected output directory and
+// writes dossier.json with the byte-identical make.fun game library.
 //
 // Serve it locally with `node serve.ts`, then open http://localhost:8080.
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+
+// Offline entry preflight and local URL.
 
 import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -19,6 +16,23 @@ import { buildDossier } from './vendor/makefun-game.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+const requiredFiles = [
+  'game/index.html',
+  'game/vendor/three.min.js',
+  'screenshots/1-start.jpg',
+  'screenshots/2-play.jpg',
+  'screenshots/3-end.jpg',
+];
+const portIndex = process.argv.indexOf('--port');
+const requestedPort = portIndex < 0 ? 8080 : Number(process.argv[portIndex + 1]);
+const port = Number.isInteger(requestedPort) && requestedPort > 0 && requestedPort < 65536 ? requestedPort : 8080;
+const missingFiles = requiredFiles.filter((path) => !existsSync(join(here, path)));
+
+console.log(`Vista Bay is served at http://localhost:${port}`);
+if (missingFiles.length > 0) {
+  console.error(`Cannot build dossier; required files are missing: ${missingFiles.join(', ')}`);
+  process.exit(1);
+}
 
 mkdirSync(out, { recursive: true });
 cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });

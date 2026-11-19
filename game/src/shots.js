@@ -3,6 +3,7 @@ import { createVehicle } from './vehicles.js';
 
 const THREE = globalThis.THREE;
 const SHOT_CAMERA_DISTANCE = 10;
+const SHOT_READY_FRAME = 12;
 
 function addHelicopter(scene) {
   const helicopter = new THREE.Group();
@@ -83,7 +84,7 @@ export function createShotDirector(options) {
   const { world, player, enter, playerCars, traffic, pedestrians, hud, rng } = options;
   const shot = new URLSearchParams(globalThis.location.search).get('shot');
   const validShot = ['start', 'play', 'end'].includes(shot) ? shot : null;
-  const state = { shot: validShot, frame: 0, elapsed: 0, car: null, helicopter: null, police: [], extraTraffic: [] };
+  const state = { shot: validShot, frame: 0, renderedFrames: 0, elapsed: 0, car: null, helicopter: null, police: [], extraTraffic: [] };
   const origin = new THREE.Vector3();
   const lookAt = new THREE.Vector3();
   const carTargetScratch = new THREE.Vector3();
@@ -221,7 +222,7 @@ export function createShotDirector(options) {
     return true;
   }
 
-  function update(dt) {
+  function updateShot(dt) {
     if (!state.shot) return;
     state.frame += 1;
     state.elapsed += dt;
@@ -278,5 +279,13 @@ export function createShotDirector(options) {
     world.camera.lookAt(lookAt);
   }
 
-  return { shot: state.shot, stage, update, state };
+  function frameRendered() {
+    state.renderedFrames += 1;
+    window.__SHOT_FRAME_COUNT__ = state.renderedFrames;
+    if (state.renderedFrames >= SHOT_READY_FRAME) {
+      window.__SHOT_READY__ = true;
+    }
+  }
+
+  return { shot: state.shot, stage, updateShot, frameRendered, state };
 }

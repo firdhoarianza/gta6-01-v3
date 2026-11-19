@@ -16,7 +16,6 @@ import { createEffects } from './effects.js';
 
 const THREE = globalThis.THREE;
 const MAX_FRAME = 0.05;
-const SHOT_READY_FRAME = 60;
 const weaponRay = new THREE.Raycaster();
 const weaponDirection = new THREE.Vector3();
 const weaponOrigin = new THREE.Vector3();
@@ -76,15 +75,13 @@ let dayCycle = progress.settings.dayCycle;
 let weapon = 'Unarmed';
 let ammo = 0;
 let reserveAmmo = 0;
-let shotPaints = 0;
 let damageFlash = 0;
 let pursuit = 0;
-let shotReady = false;
 let activeOutcome = null;
 const weaponNames = ['Sidearm', 'Compact SMG', 'Longarm'];
 const fallbackToast = document.getElementById('toast');
 const missionPoint = { x: 165, z: -5 };
-window.__SHOT_READY__ = shotReady;
+window.__SHOT_READY__ = false;
 
 hud.setMoney(progress.money);
 audio.setStation(radioName);
@@ -529,18 +526,14 @@ function frame(now) {
   const dt = Math.min(Math.max(0, (now - frame.last) / 1000 || 0), MAX_FRAME);
   frame.last = now;
   if (shotDirector.shot) {
-    shotDirector.update(1 / 60);
+    shotDirector.updateShot(1 / 60);
     effects.update(1 / 60);
     if (shotDirector.shot !== 'start') {
       hud.update(hudState(), 1 / 60);
       audio.update(1 / 60);
     }
     world.renderer.render(world.scene, world.camera);
-    shotPaints += 1;
-    if (shotPaints >= SHOT_READY_FRAME) {
-      shotReady = true;
-      window.__SHOT_READY__ = true;
-    }
+    shotDirector.frameRendered();
     return;
   }
   if (mode === 'title' || mode === 'playing') {
@@ -602,6 +595,12 @@ if (shotDirector.shot) {
     begin();
   }
   shotDirector.stage();
+  world.renderer.setPixelRatio(0.6);
+  world.renderer.shadowMap.enabled = false;
+  world.scene.traverse((object) => {
+    object.castShadow = false;
+    object.receiveShadow = false;
+  });
   hud.setWeather(world.weather);
   if (shotDirector.shot === 'start') {
     setMode('title');
